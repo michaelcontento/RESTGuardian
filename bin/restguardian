@@ -6,8 +6,6 @@ parser = OptionParser()
 parser.add_option('--port', '-p',
                   help='Port number for RESTGuardian HTTP server (default 8080)',
                   default=8080, type='int')
-parser.add_option('--verbose', '-v', help="Show http activity",
-                  action="store_true")
 opts, args = parser.parse_args()
 
 import sys
