@@ -90,9 +90,14 @@ class RecordHandler(BaseHandler):
         if new_record != record:
             self.set_header('Location', self._url(database, table, new_record))
         
-def start(opts):
-    # TODO: How to configure this?
-    settings = dict(backend=backend.MySQL(MySQLdb.connect('localhost', 'root', 'root')))
+def start(config_file, opts):
+    try:
+        settings = dict(backend=eval(open(config_file).read()))
+    except Exception, e:
+        print "error: something went wrong while reading the config file"
+        print "\n%s" % e
+        return
+        
     urls = [
         (r'/', RootHandler, settings),
         (r'/([^/]+)/?', DatabaseHandler, settings),

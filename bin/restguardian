@@ -2,15 +2,20 @@
 
 from optparse import OptionParser
 
-parser = OptionParser()
+parser = OptionParser("usage: %prog [options] config_file")
 parser.add_option('--port', '-p',
                   help='Port number for RESTGuardian HTTP server (default 8080)',
                   default=8080, type='int')
 opts, args = parser.parse_args()
+
+if len(args) != 1:
+	parser.error("incorrect number of arguments")
+
+config_file, = args
 
 import sys
 import os
 sys.path.insert(0, os.path.normpath(os.path.join(os.path.abspath(sys.argv[0]), os.pardir, os.pardir)))
 import restguardian.handler
 
-restguardian.handler.start(opts)
+restguardian.handler.start(config_file, opts)
