@@ -1,8 +1,39 @@
 import MySQLdb
+import functools
 import tornado.web
 
-# TODO: Proper escaping for mysql 
+# TODO: Proper escaping for mysql
 
+class memoized(object):
+   """Decorator that caches a function's return value each time it is called.
+   If called later with the same arguments, the cached value is returned, and
+   not re-evaluated.
+   """
+   
+   def __init__(self, func):
+      self.func = func
+      self.cache = {}
+      
+   def __call__(self, *args):
+      try:
+         return self.cache[args]
+      except KeyError:
+         value = self.func(*args)
+         self.cache[args] = value
+         return value
+      except TypeError:
+         # uncachable -- for instance, passing a list as an argument.
+         # Better to not cache than to blow up entirely.
+         return self.func(*args)
+     
+   def __repr__(self):
+      """Return the function's docstring."""
+      return self.func.__doc__
+  
+   def __get__(self, obj, objtype):
+      """Support instance methods."""
+      return functools.partial(self.__call__, obj)
+ 
 class DataInvalidError(tornado.web.HTTPError):
     def __init__(self, log_message=None):
         super(NotFoundError, self).__init__(400, log_message)
@@ -17,7 +48,7 @@ class AlreadyExistsError(tornado.web.HTTPError):
 
 class InternalError(tornado.web.HTTPError):
     def __init__(self, log_message=None):
-        super(InternalError, self).__init__(501, log_message)
+        super(InternalError, self).__init__(500, log_message)
 
 class Interface:
     def list_databases(self):
@@ -80,19 +111,27 @@ class MySQL(Interface):
     def __init__(self, mysqldb):
         self.db = mysqldb
         
+    @memoized
     def list_databases(self):
         try:
             cursor = self.db.cursor()
-            cursor.execute(
+            num_databases = cursor.execute(
                 'SELECT DISTINCT `table_schema` '
                 'FROM            `information_schema`.`tables` '
             )
-            # TODO: Special NotFoundError so we can differ between NotFound and InternalError
+            
+            if num_databases == 0:
+                raise NotFoundError()
+            
             return [database for (database,) in cursor.fetchall()]
-        except:
+        except MySQLdb.DatabaseError:
             raise InternalError()
 
+    @memoized
     def list_tables(self, database):
+        if database not in self.list_databases():
+            raise NotFoundError()
+        
         try:
             cursor = self.db.cursor()
             cursor.execute(
@@ -101,13 +140,12 @@ class MySQL(Interface):
                 'WHERE           `table_schema` = "%s" '
                 % (database,)
             )        
-            # TODO: Special NotFoundError so we can differ between NotFound and InternalError
             return [table for (table,) in cursor.fetchall()]
-        except:
+        except MySQLdb.DatabaseError:
             raise InternalError()
     
+    @memoized
     def _key_columns(self, database, table):
-        # TODO: Add caching for the result
         try:
             cursor = self.db.cursor()
             cursor.execute(
@@ -118,7 +156,7 @@ class MySQL(Interface):
                 % (database, table)
             )        
             return [column for (column, key) in cursor.fetchall() if key is not '']
-        except:
+        except MySQLdb.DatabaseError:
             raise InternalError()
 
     def list_record_keys(self, database, table):
@@ -131,15 +169,15 @@ class MySQL(Interface):
                 % (sql_columns, database, table)
             )        
             return cursor.fetchall()
-        except Exception, e:
+        except MySQLdb.DatabaseError, e:
             code, message = e
             if code == 1146:
                 raise NotFoundError()
             else: 
                 raise InternalError()
 
+    @memoized
     def _columns(self, database, table):
-        # TODO: Add caching for the result
         try:            
             cursor = self.db.cursor()
             cursor.execute(
@@ -150,7 +188,7 @@ class MySQL(Interface):
                 % (database, table)
             )
             return [column for (column,) in cursor.fetchall()]
-        except:
+        except MySQLdb.DatabaseError:
             raise InternalError()
     
     def get_record(self, database, table, record):
@@ -173,7 +211,7 @@ class MySQL(Interface):
                 % (sql_columns, database, table, sql_where)
             )
             records = cursor.fetchall()
-        except:
+        except MySQLdb.DatabaseError:
             raise InternalError()
         
         if len(records) == 0 or len(records) > 1:
@@ -187,6 +225,9 @@ class MySQL(Interface):
         return record
 
     def delete_record(self, database, table, record):
+        # Rely on `get_record` to check wether the record exists or not
+        self.get_record(database, table, record)
+        
         colums = self._columns(database, table)
         sql_where = ''
         
@@ -197,17 +238,18 @@ class MySQL(Interface):
         
         try:
             cursor = self.db.cursor()
-            cursor.execute(
+            records_deleted = cursor.execute(
                 'DELETE FROM `%s`.`%s` '
-                'WHERE        %s ' 
+                'WHERE        %s '
+                'LIMIT 1 ' 
                 % (database, table, sql_where)
             )
-            # TODO: NotFound error if there is nothing to delete
-        except:
+            if records_deleted == 0:
+                raise NotFoundError()
+        except MySQLdb.DatabaseError:
             raise InternalError()
 
     def create_record(self, database, table, values):
-        # TODO: Also check the datatypes for each column    
         if values.keys() != self._columns(database, table):
             raise DataInvalidError() 
 
@@ -224,45 +266,43 @@ class MySQL(Interface):
                 'VALUES      ("%s") ' 
                 % (database, table, sql_columns, sql_values)
             )
-        except:
-            # TODO: Raise special AleadyExistsError 
-            raise InternalError()
+        except MySQLdb.DatabaseError, e:
+            code, message = e
+            if code == 1062:
+                raise AlreadyExistsError()
+            else: 
+                raise InternalError()
         
-        # TODO: Return the key for the record
-        return []
+        return [str(values[key]) for key in values if key in self._key_columns(database, table)]
 
     def update_record(self, database, table, record, values):
-        # TODO: Also check the datatypes for each column    
-        if values.keys() != self._columns(database, table):
+        columns = self._columns(database, table)
+        
+        if values.keys() != columns:
             raise DataInvalidError()         
         
-        columns = [key for key in values.keys()]
-        insert_values = [str(value) for value in values.values()]
-                        
-        sql_columns = '`, `'.join(colums)
-        sql_values = '", "'.join(insert_values)
+        sql_where = ''
+        for idx in xrange(len(record)):
+            if sql_where is not '':
+                sql_where += ' AND '
+            sql_where += '`%s` = "%s"' % (columns[idx], record[idx])
+            
+        sql_set = ''
+        for key in columns:
+            if sql_set is not '':
+                sql_set += ', '                                
+            sql_set += '`%s` = "%s"' % (key, values[key])
                         
         try:
             cursor = self.db.cursor()
-            cursor.execute(
-                'REPLACE INTO `%s`.`%s` (`%s`) '
-                'VALUES       ("%s") '  
-                % (database, table, sql_columns, sql_values)
+            rows_updated = cursor.execute(
+                'UPDATE `%s`.`%s` '
+                'SET     %s '
+                'WHERE   %s ' 
+                'LIMIT   1 '  
+                % (database, table, sql_set, sql_where)
             )
-            # TODO: Use UPDATE instead of REPLACE (new primary key!)
-            # TODO: NotFoundError if there is nothing to update
-        except:
-            raise InternalError()
+        except MySQLdb.DatabaseError:
+            raise AlreadyExistsError()
         
-        # TODO: Return the key for the record
-        return []
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
+        return [str(values[key]) for key in values if key in self._key_columns(database, table)]

@@ -11,7 +11,8 @@ parser.add_option('--verbose', '-v', help="Show http activity",
 opts, args = parser.parse_args()
 
 import sys
-sys.path.append('..')
+import os
+sys.path.insert(0, os.path.normpath(os.path.join(os.path.abspath(sys.argv[0]), os.pardir, os.pardir)))
 import restguardian.handler
 
 restguardian.handler.start(opts)

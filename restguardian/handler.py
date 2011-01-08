@@ -2,12 +2,10 @@ import json
 import tornado.httpserver
 import tornado.ioloop
 import tornado.web
-
 import MySQLdb
+
 from restguardian import backend      
          
-# TODO: BaseHandler with exception handling
-
 class BaseHandler(tornado.web.RequestHandler):
     def initialize(self, backend):
         self.backend = backend
@@ -29,10 +27,7 @@ class BaseHandler(tornado.web.RequestHandler):
             args[2] = args[2].split('-')
             args = tuple(args)
             
-        try:
-            super(BaseHandler, self)._execute(transforms, *args, **kwargs)
-        except:
-            pass
+        super(BaseHandler, self)._execute(transforms, *args, **kwargs)
 
     def write(self, chunk):
         super(BaseHandler, self).write(json.dumps(chunk))
@@ -77,7 +72,6 @@ class RecordHandler(BaseHandler):
             self.send_errror(501)
         
         self.backend.delete_record(database, table, record)
-        self.send_error(409)
     
     def get(self, database, table, record):
         if not database or not table or not record:
@@ -91,13 +85,14 @@ class RecordHandler(BaseHandler):
         
         json_body = json.loads(self.request.body)
         new_record = self.backend.update_record(database, table, 
-                                                  record, json_body)            
-        
-        if new_record is not record:
+                                                record, json_body)            
+
+        if new_record != record:
             self.set_header('Location', self._url(database, table, new_record))
         
 def start(opts):
-    settings = dict(backend=backend.MySQL(MySQLdb.connect('localhost', 'root', '')))
+    # TODO: How to configure this?
+    settings = dict(backend=backend.MySQL(MySQLdb.connect('localhost', 'root', 'root')))
     urls = [
         (r'/', RootHandler, settings),
         (r'/([^/]+)/?', DatabaseHandler, settings),
